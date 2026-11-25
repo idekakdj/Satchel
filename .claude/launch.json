@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "satchel",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["satchel/server/start.cjs"],
+      "port": 4320
+    }
+  ]
+}

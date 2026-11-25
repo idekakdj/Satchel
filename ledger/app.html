@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="/js/tabs-bridge.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="light dark">
+  <title>Ledger</title>
+  <link rel="icon" href="/ledger/img/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/app-kit.css">
+  <link rel="stylesheet" href="/ledger/css/ledger.css">
+  <script type="module" src="/ledger/js/ledger.js"></script>
+</head>
+<body class="ledger">
+  <div class="app">
+    <header class="app-bar">
+      <span class="brand"><img src="/ledger/img/icon.svg" alt="" width="28" height="28">Ledger</span>
+      <nav class="seg" id="tabs" role="tablist" aria-label="Sections"></nav>
+      <span class="spacer"></span>
+      <span class="save-state" id="save-state" aria-live="polite"></span>
+      <button type="button" class="btn btn-accent" id="add-btn"></button>
+    </header>
+    <main class="app-main"><div class="page" id="view"></div></main>
+  </div>
+</body>
+</html>

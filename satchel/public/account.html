@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Account — Satchel</title>
+  <link rel="icon" href="/img/satchel.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/satchel.css">
+</head>
+<body>
+  <div class="scuffs" aria-hidden="true"></div>
+  <div class="page">
+    <nav class="nav">
+      <a class="brand" href="/">
+        <svg class="logo" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="2" y="2" width="36" height="36" rx="6" fill="#ececec"/>
+          <path d="M11 13h18M20 13v15" stroke="#0e0e0e" stroke-width="4" stroke-linecap="round"/>
+        </svg>
+        SATCHEL
+      </a>
+      <div class="nav-links">
+        <a href="/">Home</a>
+        <a href="/privacy">Privacy</a>
+        <a class="btn btn-ghost btn-sm" id="signout-btn" href="#">Sign out</a>
+      </div>
+    </nav>
+
+    <main class="account-wrap">
+      <h1>Your account</h1>
+      <div class="form-error" id="acct-error" role="alert"></div>
+      <div class="form-notice" id="acct-notice" role="status"></div>
+      <div class="form-notice show" id="mfa-required-note" role="status" hidden>Your administrator requires two-step sign-in. Set it up to continue.</div>
+
+      <section class="panel" aria-labelledby="h-profile">
+        <h2 id="h-profile">Profile</h2>
+        <dl class="facts">
+          <dt>Email</dt><dd id="acct-email"></dd>
+          <dt>Signs in with</dt><dd id="acct-methods"></dd>
+          <dt>Member since</dt><dd id="acct-created"></dd>
+          <dt>Last sign-in</dt><dd id="acct-last"></dd>
+          <dt>Privacy notice accepted</dt><dd id="acct-consent"></dd>
+        </dl>
+        <form id="name-form" class="inline-form">
+          <div class="field">
+            <label for="acct-name">Name</label>
+            <input id="acct-name" type="text" maxlength="60" autocomplete="name" required>
+          </div>
+          <button class="btn btn-sm" type="submit">Save name</button>
+        </form>
+      </section>
+
+      <section class="panel" aria-labelledby="h-password">
+        <h2 id="h-password">Change password</h2>
+        <p class="muted" id="pw-intro">Changing your password signs you out everywhere else.</p>
+        <form id="password-form" novalidate>
+          <div class="field" id="pw-current-field">
+            <label for="pw-current">Current password</label>
+            <input id="pw-current" type="password" autocomplete="current-password" maxlength="128">
+          </div>
+          <div class="field">
+            <label for="pw-new">New password</label>
+            <input id="pw-new" type="password" autocomplete="new-password" maxlength="128">
+            <p class="hint">Avoid common words, your name and your email.</p>
+          </div>
+          <div class="field">
+            <label for="pw-confirm">Confirm new password</label>
+            <input id="pw-confirm" type="password" autocomplete="new-password" maxlength="128">
+            <p class="hint" id="pw-confirm-hint" aria-live="polite"></p>
+          </div>
+          <button class="btn btn-sm" id="pw-submit" type="submit">Change password</button>
+        </form>
+      </section>
+
+      <section class="panel" id="mfa-panel" aria-labelledby="h-mfa">
+        <h2 id="h-mfa">Two-step sign-in</h2>
+        <p class="muted" id="mfa-status"></p>
+
+        <form id="mfa-start-form" novalidate hidden>
+          <div class="field" id="mfa-start-pw-field">
+            <label for="mfa-start-pw">Current password</label>
+            <input id="mfa-start-pw" type="password" autocomplete="current-password" maxlength="128">
+          </div>
+          <button class="btn btn-sm" id="mfa-start-btn" type="submit">Set up two-step sign-in</button>
+        </form>
+
+        <div id="mfa-enrol" hidden>
+          <ol class="mfa-steps">
+            <li>Install an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, ...).</li>
+            <li>Scan this QR code with the app, or type the key below into it.</li>
+          </ol>
+          <div class="mfa-qr"><canvas id="mfa-qr" role="img" aria-label="QR code for your authenticator app"></canvas></div>
+          <div class="field">
+            <label id="mfa-secret-label">Manual key</label>
+            <div class="mfa-key-row">
+              <code class="mfa-key" id="mfa-secret" aria-labelledby="mfa-secret-label"></code>
+              <button class="btn btn-ghost btn-sm" id="mfa-copy-key" type="button">Copy</button>
+            </div>
+          </div>
+          <form id="mfa-enable-form" novalidate>
+            <div class="field">
+              <label for="mfa-enable-code">3. Enter the 6-digit code the app shows</label>
+              <input id="mfa-enable-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456">
+            </div>
+            <button class="btn btn-sm" id="mfa-enable-btn" type="submit">Turn on</button>
+          </form>
+        </div>
+
+        <div id="mfa-codes" hidden>
+          <p><strong>Save these somewhere safe.</strong> Each works once if you lose your phone. They will not be shown again.</p>
+          <ul class="mfa-code-grid" id="mfa-code-list"></ul>
+          <p class="mfa-actions">
+            <button class="btn btn-ghost btn-sm" id="mfa-download" type="button">Download as .txt</button>
+            <button class="btn btn-ghost btn-sm" id="mfa-copy-codes" type="button">Copy</button>
+            <button class="btn btn-sm" id="mfa-saved" type="button">I have saved them</button>
+            <a class="btn btn-sm" id="mfa-continue" href="/" hidden>Continue</a>
+          </p>
+        </div>
+
+        <div id="mfa-manage" hidden>
+          <form id="mfa-regen-form" novalidate>
+            <h3 class="mfa-sub">New recovery codes</h3>
+            <p class="muted">Makes a fresh set of 10 and cancels the old ones.</p>
+            <div class="field" id="mfa-regen-pw-field">
+              <label for="mfa-regen-pw">Current password</label>
+              <input id="mfa-regen-pw" type="password" autocomplete="current-password" maxlength="128">
+            </div>
+            <div class="field">
+              <label for="mfa-regen-code">Authenticator code</label>
+              <input id="mfa-regen-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456">
+            </div>
+            <button class="btn btn-ghost btn-sm" type="submit">Get new recovery codes</button>
+          </form>
+          <form id="mfa-disable-form" novalidate>
+            <h3 class="mfa-sub">Turn off</h3>
+            <div class="field" id="mfa-disable-pw-field">
+              <label for="mfa-disable-pw">Current password</label>
+              <input id="mfa-disable-pw" type="password" autocomplete="current-password" maxlength="128">
+            </div>
+            <div class="field">
+              <label for="mfa-disable-code">Authenticator or recovery code</label>
+              <input id="mfa-disable-code" type="text" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" maxlength="20">
+            </div>
+            <button class="btn btn-danger btn-sm" type="submit">Turn off two-step sign-in</button>
+          </form>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="h-sessions">
+        <h2 id="h-sessions">Where you are signed in</h2>
+        <p class="muted">If you do not recognise a session, end it and change your password.</p>
+        <ul id="sessions-list" class="session-list"></ul>
+        <button class="btn btn-ghost btn-sm" id="revoke-others-btn" type="button">Sign out everywhere else</button>
+      </section>
+
+      <section class="panel" id="tokens-panel" aria-labelledby="h-tokens" hidden>
+        <h2 id="h-tokens">Access tokens</h2>
+        <p class="muted">Tokens let a tool on this computer, such as an AI assistant using the Satchel MCP server, read or change your Sigma projects, Pigment paintings and ImageVendor images. A token cannot sign in, change account settings or make more tokens. Revoke any token you no longer use.</p>
+        <ul id="tokens-list" class="session-list"></ul>
+        <p class="muted" id="tokens-empty">You have no access tokens.</p>
+
+        <div id="token-created" class="token-created" hidden>
+          <p><strong>Copy this token now.</strong> It will not be shown again. Treat it like a password.</p>
+          <div class="mfa-key-row">
+            <code class="mfa-key" id="token-secret"></code>
+            <button class="btn btn-ghost btn-sm" id="token-copy" type="button">Copy</button>
+          </div>
+          <p class="token-actions"><button class="btn btn-sm" id="token-done" type="button">I have copied it</button></p>
+        </div>
+
+        <form id="token-form" novalidate>
+          <h3 class="mfa-sub">New token</h3>
+          <div class="field">
+            <label for="token-name">Name</label>
+            <input id="token-name" type="text" maxlength="60" autocomplete="off" placeholder="Claude Desktop on this laptop">
+          </div>
+          <div class="field">
+            <label for="token-access">Access</label>
+            <select id="token-access">
+              <option value="read,write">Read and change</option>
+              <option value="read">Read only</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="token-expiry">Expires after</label>
+            <select id="token-expiry">
+              <option value="7">7 days</option>
+              <option value="30">30 days</option>
+              <option value="90" selected>90 days</option>
+              <option value="365">1 year</option>
+              <option value="0">Never</option>
+            </select>
+          </div>
+          <div class="field" id="token-pw-field">
+            <label for="token-pw">Current password</label>
+            <input id="token-pw" type="password" autocomplete="current-password" maxlength="128">
+          </div>
+          <button class="btn btn-sm" id="token-create-btn" type="submit">Create token</button>
+        </form>
+      </section>
+
+      <section class="panel" aria-labelledby="h-data">
+        <h2 id="h-data">Your data</h2>
+        <p class="muted" id="storage-line"></p>
+        <p>Download a copy of everything held about you: your profile, security activity and every project, painting and image.</p>
+        <button class="btn btn-sm" id="export-btn" type="button">Download my data</button>
+      </section>
+
+      <section class="panel danger-zone" aria-labelledby="h-delete">
+        <h2 id="h-delete">Delete account</h2>
+        <p>This permanently erases your account, all projects, paintings and images, and every session. It cannot be undone. Download your data first if you want a copy.</p>
+        <p class="muted" id="del-google-note" hidden>Your account has no password, so you will be asked to continue with Google again if you last signed in more than 10 minutes ago.</p>
+        <form id="delete-form">
+          <div class="field" id="del-password-field">
+            <label for="del-password">Current password</label>
+            <input id="del-password" type="password" autocomplete="current-password" maxlength="128" required>
+          </div>
+          <div class="field">
+            <label for="del-confirm">Type DELETE to confirm</label>
+            <input id="del-confirm" type="text" autocomplete="off" maxlength="10" required>
+          </div>
+          <button class="btn btn-danger btn-sm" type="submit">Delete my account</button>
+        </form>
+      </section>
+    </main>
+
+    <footer>
+      <div>© 2026 Satchel. <a href="/terms">Terms of service</a> · <a href="/privacy">Privacy policy</a></div>
+    </footer>
+  </div>
+  <script type="module" src="/js/account.js"></script>
+</body>
+</html>

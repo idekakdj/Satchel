@@ -1,0 +1,22 @@
+{
+  "name": "satchel",
+  "version": "0.1.0",
+  "description": "Satchel: Almanac, Margin, Ledger, Stride and Tunnel behind one shared sign-in.",
+  "author": "Satchel",
+  "main": "server/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "npm --prefix ../almanac install && npm --prefix ../almanac run build && node scripts/build-landings.cjs",
+    "start": "node server/start.cjs",
+    "start:hosted": "node server/hosted.cjs",
+    "dev": "node server/start.cjs",
+    "test": "node test/run-all.cjs"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.5",
+    "helmet": "^8.3.0",
+    "nodemailer": "^10.6.1"
+  }
+}

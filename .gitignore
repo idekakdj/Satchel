@@ -1,0 +1,29 @@
+**/node_modules/
+satchel/data/
+dist/
+*.log
+
+# Built output (npm run build in satchel/ or almanac/)
+almanac/app/
+almanac/server/
+
+# Secrets, keys and database copies must never be committed
+.env
+*.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.conf
+db.json
+db.json.bak
+db.json.premigration
+db.json.tmp
+audit/
+runtime.json
+mail.json
+
+# Personal editor/tool state
+.claude/settings.local.json

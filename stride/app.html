@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="/js/tabs-bridge.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="light dark">
+  <title>Stride</title>
+  <link rel="icon" href="/stride/img/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/app-kit.css">
+  <link rel="stylesheet" href="/stride/css/stride.css">
+  <script type="module" src="/stride/js/stride.js"></script>
+</head>
+<body class="stride">
+  <div class="app">
+    <header class="app-bar">
+      <span class="brand"><img src="/stride/img/icon.svg" alt="" width="28" height="28">Stride</span>
+      <nav class="seg" id="tabs" role="tablist" aria-label="Sections"></nav>
+      <span class="spacer"></span>
+      <span class="save-state" id="save-state" aria-live="polite"></span>
+    </header>
+    <main class="app-main"><div class="page" id="view"></div></main>
+  </div>
+</body>
+</html>
