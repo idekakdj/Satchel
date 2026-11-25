@@ -26,6 +26,10 @@ npm start
 
 Then open http://127.0.0.1:4320. Data is stored in `%APPDATA%/Satchel/data/db.json` on Windows, or in `SATCHEL_DATA_DIR` if you set it. Set `SATCHEL_DATA_KEY` to encrypt that file. This matters here because Tunnel keeps WireGuard private keys in it. See `satchel/.env.example` for every setting, including Google sign-in and email.
 
+### Windows desktop app
+
+`npm run build:desktop` (after `npm run build`) makes `dist/Satchel-Setup-<version>-x64.exe`: a desktop app that runs Satchel in its own window and keeps it in the system tray, so Almanac reminders still arrive when the window is closed. It uses the same data folder as `npm start`. See `satchel/desktop/README.md`.
+
 To use Satchel on an iPad, it has to be reachable from the iPad: either host it (see the hosted mode in `satchel/server/hosted.cjs`) or open it from your PC's address on the same network.
 
 | URL | What |
@@ -92,5 +96,5 @@ Nine Toolkit suites are not yet in `npm test`: security, shell, server, mfa, hos
 ## Not done yet
 
 - **Real iPad testing.** Margin's pen input has been checked with simulated pen events in a desktop browser, not on a physical iPad with an Apple Pencil.
-- **Reminders while closed.** Almanac cannot remind you while it is closed. That would need Web Push and an installable web app.
+- **Reminders while closed.** In a browser, Almanac cannot remind you once its tab is closed; that would need Web Push. The desktop app avoids this by staying in the tray.
 - **The Toolkit test suites** listed above still need porting.
