@@ -1,6 +1,6 @@
 {
   "name": "satchel",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Satchel: Almanac, Margin, Ledger, Stride and Tunnel behind one shared sign-in.",
   "author": "Satchel",
   "main": "server/index.js",

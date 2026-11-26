@@ -10,6 +10,7 @@ const $ = id => document.getElementById(id);
 const errorBox = $('acct-error');
 const noticeBox = $('acct-notice');
 let hasPassword = true;
+let zoneTouched = false;
 
 const meter = attachMeter($('pw-new'), { minLength: MIN_LENGTH });
 const match = attachMatch($('pw-new'), $('pw-confirm'), $('pw-confirm-hint'));
@@ -69,6 +70,8 @@ async function loadAccount() {
     ? 'version ' + account.consent.version + ', ' + when(account.consent.at)
     : 'before consent was recorded';
   $('acct-name').value = account.name;
+  showPhoto(account.avatar, account.name || account.email);
+  if (!zoneTouched) { $('acct-zone').value = account.timeZone || deviceZone(); showZoneNow(); }
   const s = account.storage, c = s.counts;
   $('storage-line').textContent = 'Storing ' + (c.notes || 0) + ' note(s), ' + (c.appdocs || 0) + ' app workspace(s) and ' + (c.calendars || 0) + ' calendar: '
     + bytes(s.usedBytes) + (s.limitBytes ? ' of ' + bytes(s.limitBytes) : '') + ' used.';
@@ -357,6 +360,8 @@ $('name-form').addEventListener('submit', async e => {
   try {
     await call('/api/account', { method: 'PATCH', body: { name: $('acct-name').value } });
     showNotice('Name updated.');
+    tellShell();
+    loadAccount().catch(() => {});
   } catch (err) { showError(err.message); }
 });
 
@@ -417,9 +422,147 @@ $('delete-form').addEventListener('submit', async e => {
   } catch (err) { showError(err.message, err.data && err.data.code); }
 });
 
-$('signout-btn').addEventListener('click', async e => {
+// Sign out of Satchel (every app). Inside the shell the whole window goes to the sign-in page.
+async function signOut(e) {
   e.preventDefault();
-  try { await api('/api/auth/logout', { method: 'POST' }); } finally { window.location.href = '/'; }
+  try { await api('/api/auth/logout', { method: 'POST' }); } finally { try { window.top.location.href = '/'; } catch { window.location.href = '/'; } }
+}
+$('signout-btn').addEventListener('click', signOut);
+$('signout-main').addEventListener('click', signOut);
+
+// ---------- Satchel-wide settings: photo and time zone ----------
+// Tell the shell (when this page is inside it) so the sidebar and open apps update at once.
+function tellShell() { try { if (window.SatchelTabs && window.SatchelTabs.settingsChanged) window.SatchelTabs.settingsChanged(); } catch { /* ignore */ } }
+
+function deviceZone() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } }
+function knownZone(z) { if (!z || z.length > 64) return false; try { new Intl.DateTimeFormat('en-CA', { timeZone: z }); return true; } catch { return false; } }
+try {
+  const list = $('zone-list');
+  for (const z of (Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : [])) { const o = document.createElement('option'); o.value = z; list.append(o); }
+} catch { /* older browser: typing a zone still works */ }
+function showZoneNow() {
+  const z = $('acct-zone').value.trim();
+  $('zone-now').textContent = knownZone(z)
+    ? 'It is ' + new Date().toLocaleString(undefined, { timeZone: z, weekday: 'long', hour: 'numeric', minute: '2-digit' }) + ' there now.'
+    : 'Choose a time zone from the list, such as America/Toronto or Europe/London.';
+}
+$('acct-zone').addEventListener('input', () => { zoneTouched = true; showZoneNow(); });
+$('zone-device').addEventListener('click', () => { zoneTouched = true; $('acct-zone').value = deviceZone(); showZoneNow(); $('acct-zone').focus(); });
+$('zone-form').addEventListener('submit', async e => {
+  e.preventDefault(); clearMessages();
+  const z = $('acct-zone').value.trim();
+  if (!knownZone(z)) { showError('Choose a time zone from the list.'); return; }
+  try {
+    await call('/api/account', { method: 'PATCH', body: { timeZone: z } });
+    zoneTouched = false;
+    showNotice('Time zone saved. Every Satchel app now uses ' + z + '.');
+    tellShell();
+  } catch (err) { showError(err.message); }
 });
+
+function showPhoto(avatar, name) {
+  const box = $('photo-preview');
+  box.textContent = '';
+  if (typeof avatar === 'string' && avatar.startsWith('data:image/')) {
+    const img = document.createElement('img'); img.src = avatar; img.alt = ''; box.append(img);
+  } else box.textContent = (String(name || '?').trim().charAt(0) || '?').toUpperCase();
+  $('photo-remove').hidden = !avatar;
+}
+
+// The photo is cropped to a circle here in the browser and saved as a small 256 px JPEG.
+const crop = { img: null, zoom: 1, x: 0, y: 0, drag: null };
+const canvas = $('photo-canvas'), ctx = canvas.getContext('2d');
+function coverScale() { return Math.max(canvas.width / crop.img.width, canvas.height / crop.img.height); }
+function clampCrop() {
+  const sc = coverScale() * crop.zoom, w = crop.img.width * sc, h = crop.img.height * sc;
+  crop.x = Math.min(0, Math.max(canvas.width - w, crop.x));
+  crop.y = Math.min(0, Math.max(canvas.height - h, crop.y));
+}
+function drawCrop() {
+  if (!crop.img) return;
+  clampCrop();
+  const sc = coverScale() * crop.zoom;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(crop.img, crop.x, crop.y, crop.img.width * sc, crop.img.height * sc);
+}
+function closeEditor() { $('photo-editor').hidden = true; crop.img = null; $('photo-upload').disabled = false; }
+$('photo-upload').addEventListener('click', () => {
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = 'image/png,image/jpeg,image/webp';
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    clearMessages();
+    if (file.size > 15 * 1024 * 1024) { showError('Choose a photo smaller than 15 MB.'); return; }
+    try {
+      const img = await createImageBitmap(file);
+      if (img.width < 32 || img.height < 32) throw new Error('small');
+      crop.img = img; crop.zoom = 1; $('photo-zoom').value = '1';
+      const sc = coverScale();
+      crop.x = (canvas.width - img.width * sc) / 2; crop.y = (canvas.height - img.height * sc) / 2;
+      $('photo-editor').hidden = false; $('photo-upload').disabled = true;
+      drawCrop();
+      $('photo-zoom').focus();
+    } catch { showError('That image could not be opened. Try a JPEG or PNG photo.'); }
+  });
+  input.click();
+});
+$('photo-zoom').addEventListener('input', () => {
+  if (!crop.img) return;
+  // Zoom around the centre of the circle.
+  const before = coverScale() * crop.zoom, cx = canvas.width / 2, cy = canvas.height / 2;
+  const px = (cx - crop.x) / before, py = (cy - crop.y) / before;
+  crop.zoom = Number($('photo-zoom').value) || 1;
+  const after = coverScale() * crop.zoom;
+  crop.x = cx - px * after; crop.y = cy - py * after;
+  drawCrop();
+});
+canvas.addEventListener('pointerdown', e => {
+  if (!crop.img) return;
+  e.preventDefault();   // no text selection or page scroll while positioning the photo
+  try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
+  crop.drag = { x: e.clientX, y: e.clientY };
+});
+canvas.addEventListener('pointermove', e => {
+  if (!crop.drag) return;
+  const k = canvas.width / canvas.getBoundingClientRect().width;
+  crop.x += (e.clientX - crop.drag.x) * k; crop.y += (e.clientY - crop.drag.y) * k;
+  crop.drag = { x: e.clientX, y: e.clientY };
+  drawCrop();
+});
+for (const ev of ['pointerup', 'pointercancel']) canvas.addEventListener(ev, () => { crop.drag = null; });
+canvas.tabIndex = 0;
+canvas.addEventListener('keydown', e => {
+  const step = { ArrowLeft: [12, 0], ArrowRight: [-12, 0], ArrowUp: [0, 12], ArrowDown: [0, -12] }[e.key];
+  if (!step || !crop.img) return;
+  e.preventDefault(); crop.x += step[0]; crop.y += step[1]; drawCrop();
+});
+$('photo-cancel').addEventListener('click', closeEditor);
+$('photo-save').addEventListener('click', async () => {
+  if (!crop.img) return;
+  const out = document.createElement('canvas'); out.width = out.height = 256;
+  const o = out.getContext('2d'); o.imageSmoothingQuality = 'high';
+  o.fillStyle = '#ffffff'; o.fillRect(0, 0, 256, 256);
+  o.drawImage(canvas, 0, 0, 256, 256);
+  let avatar = '';
+  for (const q of [0.88, 0.75, 0.6]) { avatar = out.toDataURL('image/jpeg', q); if (avatar.length < 190 * 1024) break; }
+  clearMessages();
+  $('photo-save').disabled = true;
+  try {
+    await call('/api/account', { method: 'PATCH', body: { avatar } });
+    closeEditor();
+    showNotice('Photo saved.');
+    tellShell();
+    await loadAccount();
+  } catch (err) { showError(err.message); }
+  finally { $('photo-save').disabled = false; }
+});
+$('photo-remove').addEventListener('click', async () => {
+  clearMessages();
+  try { await call('/api/account', { method: 'PATCH', body: { avatar: null } }); showNotice('Photo removed.'); tellShell(); await loadAccount(); }
+  catch (err) { showError(err.message); }
+});
+
 
 Promise.all([loadAccount(), loadSessions(), loadTokens()]).catch(err => { if (err.status !== 401) showError(err.message); });

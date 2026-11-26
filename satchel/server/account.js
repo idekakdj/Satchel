@@ -26,12 +26,24 @@ const almanac = require('./almanac');
 const BAD_PASSWORD = 'Your current password is incorrect.';
 const REAUTH_MS = 10 * 60 * 1000;
 
+// An IANA time zone name the runtime knows (America/Toronto, Europe/London, UTC ...).
+function validZone(z) {
+  if (typeof z !== 'string' || !z || z.length > 64 || !/^[A-Za-z0-9_+\-/]+$/.test(z)) return false;
+  try { new Intl.DateTimeFormat('en-CA', { timeZone: z }); return true; } catch { return false; }
+}
+// Profile photos are small square images cropped in the browser (256 px), kept as data URLs.
+const AVATAR_MAX = 200 * 1024;
+function validAvatar(v) {
+  return typeof v === 'string' && v.length <= AVATAR_MAX && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(v);
+}
+
 function profile(u, req) {
   const counts = {};
   for (const [c] of COLLECTIONS) counts[c] = db[c].filter(r => r.ownerId === u.id).length;
   const limit = limitBytes();
   return {
     id: u.id, name: u.name, email: u.email, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null,
+    timeZone: u.timeZone || null, avatar: u.avatar || null,
     consent: u.consent || null, currentPrivacyVersion: PRIVACY_VERSION,
     hasPassword: !!u.passwordHash, google: !!u.googleSub,
     mfa: { enabled: !!(u.mfa && u.mfa.enabled), enrolledAt: (u.mfa && u.mfa.enrolledAt) || null, recoveryRemaining: mfa.recoveryRemaining(u) },
@@ -65,12 +77,27 @@ router.get('/', (req, res) => res.json({ account: profile(req.user, req) }));
 
 // Correct personal information (PIPEDA accuracy principle). Changing the email address
 // is deliberately not offered here: it needs ownership verification of the new address.
+// Satchel-wide settings live here too: the time zone every app uses, and the profile photo.
+// Each field is optional; only the ones sent are changed.
 router.patch('/', (req, res) => {
-  const { name } = req.body || {};
-  if (!validName(name)) return res.status(400).json({ error: 'Enter a name (1-60 characters, no control characters).' });
-  req.user.name = cleanName(name, 60);
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const fields = [];
+  if ('name' in body) {
+    if (!validName(body.name)) return res.status(400).json({ error: 'Enter a name (1-60 characters, no control characters).' });
+    fields.push(['name', cleanName(body.name, 60)]);
+  }
+  if ('timeZone' in body) {
+    if (!validZone(body.timeZone)) return res.status(400).json({ error: 'Choose a time zone from the list.' });
+    fields.push(['timeZone', body.timeZone]);
+  }
+  if ('avatar' in body) {
+    if (body.avatar !== null && !validAvatar(body.avatar)) return res.status(400).json({ error: 'That photo could not be saved. Try a JPEG or PNG image.' });
+    fields.push(['avatar', body.avatar]);
+  }
+  if (!fields.length) return res.status(400).json({ error: 'Nothing to change.' });
+  for (const [k, v] of fields) { if (v === null) delete req.user[k]; else req.user[k] = v; }
   save();
-  audit('account.update', { req, userId: req.user.id, detail: { field: 'name' } });
+  for (const [k] of fields) audit('account.update', { req, userId: req.user.id, detail: { field: k } });
   res.json({ account: profile(req.user, req) });
 });
 

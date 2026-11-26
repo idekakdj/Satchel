@@ -7,7 +7,7 @@ import { DateTime } from 'luxon';
 import { JsonStore, emptyState, type CalendarState } from './json-store';
 import { ReminderScheduler, type ReminderNotice } from './scheduler';
 import { avatarCropSchema } from '../shared/avatar-crop';
-import { PROFILE_ID, profileSchema, avatarSchema, type UserProfile } from '../shared/model';
+import { PROFILE_ID, profileSchema, type UserProfile } from '../shared/model';
 import { appearanceSchema, defaultAppearance } from '../shared/appearance';
 import { atDate, recurringDates, sourceDate, addDays, localInstant, expand, timingLabel } from '../domain/calendar';
 import { createBackup, readBackup, remapBackup, previewImport, parseCalendar, exportCalendar, type ParseOptions } from '../domain/interchange';
@@ -18,7 +18,8 @@ export const VERSION = '1.0.0';
 const deviceSchema = z.object({ notifications: z.boolean(), startAtLogin: z.boolean(), closeToTray: z.boolean(), quietStart: localTime.nullable(), quietEnd: localTime.nullable(), privacy: z.boolean(), followZone: z.boolean(), onboardingDone: z.boolean(), view: z.enum(['month', 'week', 'agenda']), month: z.string().regex(/^\d{4}-\d{2}$/).nullable(), hideCompleted: z.boolean(), weekScale: z.number().int().min(20).max(100).nullable(), showWeekAllDay: z.boolean() }).strict();
 const MAX_TEXT = 10 * 1024 * 1024;
 
-export interface SatchelUser { id: string; email: string; name: string; createdAt?: string }
+// timeZone and avatar are Satchel-wide account settings (Settings page), not Almanac's own.
+export interface SatchelUser { id: string; email: string; name: string; createdAt?: string; timeZone?: string | null; avatar?: string | null }
 export interface WebNotice { id: string; title: string; body: string; itemId?: string; occurrenceKey?: string; inbox?: boolean }
 
 export class WebCalendarService {
@@ -48,23 +49,34 @@ export class WebCalendarService {
     this.notices.push({ id: randomUUID(), title: notice.title, body: notice.body, itemId: notice.itemId, occurrenceKey: notice.occurrenceKey, inbox: notice.inbox });
     if (this.notices.length > 50) this.notices.splice(0, this.notices.length - 50);
   }
+  /** The calendar's time zone: the Satchel account's zone, which every Satchel app shares. */
+  zone(): string {
+    const account = zoneSchema.safeParse(this.user.timeZone); if (account.success) return account.data;
+    const saved = this.store.list().find((r): r is Preferences => r.kind === 'preferences');
+    if (saved) return saved.zone;
+    const browser = zoneSchema.safeParse(this.browserZone); return browser.success ? browser.data : 'UTC';
+  }
   preferences(): Preferences {
     const existing = this.store.list().find((r): r is Preferences => r.kind === 'preferences');
-    return existing ?? preferencesSchema.parse({ id: 'c44ba791-5ae6-5ec6-9813-0c840db2f0f2', kind: 'preferences', zone: this.browserZone ?? 'UTC' });
+    const prefs = existing ?? preferencesSchema.parse({ id: 'c44ba791-5ae6-5ec6-9813-0c840db2f0f2', kind: 'preferences', zone: this.zone() });
+    return { ...prefs, zone: this.zone() };
   }
-  private displayZone(): string {
-    const fixed = this.preferences().zone; if (!this.device.followZone) return fixed;
-    const z2 = zoneSchema.safeParse(this.browserZone ?? fixed); return z2.success ? z2.data : fixed;
-  }
+  private displayZone(): string { return this.zone(); }
   private changed() { this.scheduler.reconcile(); }
-  private profile(): UserProfile {
+  /** The stored profile record (appearance lives here); name and photo come from the account. */
+  private storedProfile(): UserProfile {
     const saved = this.store.get(PROFILE_ID); if (saved?.kind === 'profile') return saved;
     return profileSchema.parse({ id: PROFILE_ID, kind: 'profile', name: this.user.name?.trim() || 'Student', avatar: null, joinedAt: this.user.createdAt ?? null, appearance: defaultAppearance });
+  }
+  private profile(): UserProfile {
+    return { ...this.storedProfile(), name: this.user.name?.trim() || 'Student', avatar: this.user.avatar ?? null };
   }
   snapshot(): Snapshot {
     const store = this.store;
     return {
-      records: store.list(), recordsRevision: store.listRevision(), profile: this.profile(), localCreatedAt: store.metadata('profileFirstUsed', undefined),
+      // Saved preferences always show the account's time zone; the revision includes the zone so a
+      // change in Settings reaches open calendars on their next poll.
+      records: store.list().map(r => r.kind === 'preferences' ? { ...r, zone: this.zone() } : r), recordsRevision: store.listRevision() + '|' + this.zone(), profile: this.profile(), localCreatedAt: store.metadata('profileFirstUsed', undefined),
       displayZone: this.displayZone(), notificationTest: this.notificationTest,
       session: { uid: this.user.id, email: this.user.email, displayName: this.user.name, verified: true, providers: ['satchel'], createdAt: this.user.createdAt },
       mfaChallenge: null, signInNotice: null, device: this.device,
@@ -85,11 +97,10 @@ export class WebCalendarService {
         if (p.recordsRevision && p.recordsRevision === snapshot.recordsRevision) { const { records, ...update } = snapshot; return { ...update, notices: this.takeNotices() }; }
         return { ...snapshot, notices: this.takeNotices() };
       }
-      case 'profile.save': { const p = z.object({ name: z.string().trim().min(1).max(100) }).strict().parse(payload); store.save({ ...this.profile(), name: p.name }); this.changed(); return true; }
-      // The browser crops the photo itself (see web-bridge.ts) and sends the finished 128px PNG.
-      case 'profile.avatar': { const p = z.object({ avatar: avatarSchema }).strict().parse(payload); store.save({ ...this.profile(), avatar: p.avatar }); this.changed(); return true; }
-      case 'profile.removePhoto': store.save({ ...this.profile(), avatar: null }); this.changed(); return true;
-      case 'appearance': { const appearance = appearanceSchema.parse(payload); store.save({ ...this.profile(), appearance }); this.changed(); return true; }
+      // Name and photo are Satchel account settings now (Settings page), shared by every app.
+      case 'profile.save': case 'profile.avatar': case 'profile.removePhoto':
+        throw new Error('Change your name and photo in Satchel settings.');
+      case 'appearance': { const appearance = appearanceSchema.parse(payload); store.save({ ...this.storedProfile(), appearance }); this.changed(); return true; }
       case 'schedule.preview': {
         const p = z.object({ value: z.union([itemSchema, semesterSchema]), from: localDate.optional(), to: localDate.optional(), restoreOldBreaks: z.boolean().default(false) }).strict().parse(payload);
         const records = store.list(), previous = store.get(p.value.id);

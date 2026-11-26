@@ -62,7 +62,7 @@ test('landing pages are public; signed-in visitors go to the dashboard', async (
   }
   const home = await call('/', { cookie });
   assert.equal(home.status, 200);
-  assert.match(await home.res.text(), /id="tab-strip"/);
+  assert.match(await home.res.text(), /id="sb-nav"/);
 });
 
 test('every app page and data API requires sign-in', async () => {
@@ -209,6 +209,7 @@ test('account export and deletion cover every app', async () => {
 
 test('app pages use no inline scripts or styles (the CSP forbids them)', () => {
   const files = [path.join(ROOT, 'satchel', 'public', 'index.html'), path.join(ROOT, 'satchel', 'public', 'home.html'),
+    path.join(ROOT, 'satchel', 'public', 'account.html'),
     ...APPS.map(a => path.join(ROOT, a, 'index.html')), ...['margin', 'ledger', 'stride', 'tunnel'].map(a => path.join(ROOT, a, 'app.html'))];
   for (const f of files) {
     const html = fs.readFileSync(f, 'utf8');
@@ -229,4 +230,58 @@ test('the foods bank is well formed', () => {
     for (const v of f.slice(2, 7)) assert.ok(typeof v === 'number' && v >= 0 && v <= 900, f[0]);
     assert.match(f[7], /^[^:;]+:[\d.]+(;[^:;]+:[\d.]+)*$/, f[0]);
   }
+});
+
+test('Satchel settings: one time zone and photo on the account, shared by every app', async () => {
+  const a = await account();
+  let r = await call('/api/account', { method: 'PATCH', cookie: a.cookie, body: { timeZone: 'Europe/London' } });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.account.timeZone, 'Europe/London');
+  r = await call('/api/auth/me', { cookie: a.cookie });
+  assert.equal(r.data.user.timeZone, 'Europe/London');
+  for (const bad of ['Mars/Olympus', '', 'x'.repeat(80), 42, '../etc']) {
+    r = await call('/api/account', { method: 'PATCH', cookie: a.cookie, body: { timeZone: bad } });
+    assert.equal(r.status, 400, String(bad));
+  }
+  // Almanac follows the account zone.
+  r = await call('/api/almanac/rpc', { method: 'POST', cookie: a.cookie, body: { command: 'snapshot', payload: {} } });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.result.displayZone, 'Europe/London');
+  // Photos: small image data URLs only; null removes it.
+  const photo = 'data:image/jpeg;base64,' + Buffer.from('fake jpeg bytes').toString('base64');
+  r = await call('/api/account', { method: 'PATCH', cookie: a.cookie, body: { avatar: photo } });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.account.avatar, photo);
+  r = await call('/api/almanac/rpc', { method: 'POST', cookie: a.cookie, body: { command: 'snapshot', payload: {} } });
+  assert.equal(r.data.result.profile.avatar, photo);
+  for (const bad of ['javascript:alert(1)', 'data:text/html;base64,PGI+', 'data:image/svg+xml;base64,PHN2Zz4=', 'data:image/jpeg;base64,' + 'A'.repeat(210 * 1024)]) {
+    r = await call('/api/account', { method: 'PATCH', cookie: a.cookie, body: { avatar: bad } });
+    assert.notEqual(r.status, 200, bad.slice(0, 30));
+  }
+  r = await call('/api/account', { method: 'PATCH', cookie: a.cookie, body: { avatar: null } });
+  assert.equal(r.data.account.avatar, null);
+  // Almanac no longer changes the name or photo itself.
+  r = await call('/api/almanac/rpc', { method: 'POST', cookie: a.cookie, body: { command: 'profile.save', payload: { name: 'Other' } } });
+  assert.equal(r.status, 400);
+});
+
+test('Stride plan endpoint returns only the plan and skips unchanged data', async () => {
+  const a = await account();
+  let r = await call('/api/apps/stride/plan', { cookie: a.cookie });
+  assert.deepEqual(r.data, { exists: false, plan: null, revision: 0 });
+  const doc = { version: 2, profile: { weightKg: 70 }, log: { '2026-11-25': { entries: [] } }, plan: { meals: [{ id: 'm1', date: '2026-11-25', time: '08:00', name: 'Breakfast', items: [] }], workouts: [] } };
+  r = await call('/api/apps/stride', { method: 'PUT', cookie: a.cookie, body: { document: doc, baseRevision: 0 } });
+  assert.equal(r.status, 200);
+  r = await call('/api/apps/stride/plan', { cookie: a.cookie });
+  assert.equal(r.data.exists, true);
+  assert.equal(r.data.plan.meals[0].id, 'm1');
+  assert.equal(r.data.profile, undefined);
+  assert.equal(JSON.stringify(r.data).includes('weightKg'), false);
+  r = await call('/api/apps/stride/plan?since=' + r.data.revision, { cookie: a.cookie });
+  assert.equal(r.data.unchanged, true);
+  const other = await account();
+  r = await call('/api/apps/stride/plan', { cookie: other.cookie });
+  assert.equal(r.data.exists, false);
+  r = await call('/api/apps/stride/plan');
+  assert.equal(r.status, 401);
 });

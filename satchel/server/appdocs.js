@@ -33,6 +33,17 @@ function appName(req, res) {
 }
 function find(userId, app) { return db.appdocs.find(d => d.ownerId === userId && d.app === app) || null; }
 
+// Only Stride's meal and workout plan, for Almanac's Stride calendar: it polls, and has no
+// need for the rest of the fitness log. ?since=<revision> answers { unchanged: true } cheaply.
+router.get('/stride/plan', (req, res) => {
+  const doc = find(req.user.id, 'stride');
+  if (!doc) return res.json({ exists: false, plan: null, revision: 0 });
+  const rev = revision(doc);
+  if (req.query.since !== undefined && String(req.query.since) === String(rev)) return res.json({ unchanged: true, revision: rev });
+  const plan = doc.document && typeof doc.document.plan === 'object' && doc.document.plan ? doc.document.plan : null;
+  res.json({ exists: true, plan: plan ? { meals: Array.isArray(plan.meals) ? plan.meals : [], workouts: Array.isArray(plan.workouts) ? plan.workouts : [] } : null, revision: rev });
+});
+
 router.get('/:app', (req, res) => {
   const app = appName(req, res); if (!app) return;
   const doc = find(req.user.id, app);

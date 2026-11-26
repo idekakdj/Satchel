@@ -47,7 +47,7 @@ const SIGNUPS_PAUSED = 'Sign-ups are paused: this Satchel cannot send email yet,
   'The administrator needs to set up email (run "node scripts/setup-mail.cjs" in the satchel folder).';
 
 function publicUser(u) {
-  return { id: u.id, name: u.name, email: u.email };
+  return { id: u.id, name: u.name, email: u.email, timeZone: u.timeZone || null, avatar: u.avatar || null };
 }
 // Present (true) only when SATCHEL_REQUIRE_MFA=1 and the new session must first set up two-step sign-in.
 function setupFlag(sessionKey) {

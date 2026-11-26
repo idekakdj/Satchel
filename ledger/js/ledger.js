@@ -111,7 +111,7 @@ function setupView() {
   const name = h('input.input', { value: 'Chequing', maxlength: 60 });
   const type = h('select.input', Object.entries(ACCOUNT_TYPES).map(([k, l]) => h('option', { value: k, text: l })));
   type.value = 'chequing';
-  const opening = h('input.input', { inputmode: 'decimal', placeholder: '0.00' });
+  const opening = h('input.input', { inputmode: 'decimal', value: '0.00', placeholder: '0.00' });
   const cur = h('select.input', CURRENCIES.map(c => h('option', { value: c, text: c })));
   cur.value = D().currency;
   const form = h('form.card', { onsubmit: e => {
@@ -470,7 +470,7 @@ function accountSheet(a) {
   const name = h('input.input', { value: a ? a.name : '', maxlength: 60, required: true });
   const type = h('select.input', Object.entries(ACCOUNT_TYPES).map(([k, l]) => h('option', { value: k, text: l })));
   type.value = a ? a.type : 'cash';
-  const opening = h('input.input', { inputmode: 'decimal', value: a ? ((a.opening || 0) / 100).toFixed(2) : '' });
+  const opening = h('input.input', { inputmode: 'decimal', value: a ? ((a.opening || 0) / 100).toFixed(2) : '0.00' });
   const archived = h('input', { type: 'checkbox', checked: !!(a && a.archived) });
   const form = h('form', { onsubmit: e => {
     e.preventDefault();

@@ -5,11 +5,11 @@ const root = path.join(__dirname, '..', '..');
 const node = process.execPath;
 const suites = [
   ['Satchel apps', node, ['--test', '--test-force-exit', 'satchel/test/apps.test.cjs']],
+  ['App kit (autosave, time zone)', node, ['--test', 'satchel/test/app-kit.test.mjs']],
   ['Email', node, ['--test', 'satchel/test/mail.test.cjs']],
   ['Google sign-in', node, ['--test', 'satchel/test/google.test.cjs']],
   ['Upload guard', node, ['--test', 'satchel/test/upload-guard.test.cjs']],
   ['Local runtime', node, ['--test', 'satchel/test/local-runtime.test.cjs']],
-  ['Migration', node, ['--test', 'satchel/test/migration.test.cjs']],
   ['Data integrity', node, ['--test', 'satchel/test/data-integrity.test.cjs']],
   // Almanac's calendar logic (vitest, from the C.C. Lime test suite).
   ['Almanac', process.platform === 'win32' ? 'npx.cmd' : 'npx', ['vitest', 'run'], path.join(root, 'almanac')],

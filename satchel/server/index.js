@@ -88,7 +88,8 @@ app.use('/api', apiLimiter, writeLimiter, tokenAuth, csrfProtect, (req, res, nex
 });
 const json = limit => express.json({ limit });
 app.use('/api/auth', json('16kb'), authRoutes);
-app.use('/api/account', rejectToken, requireAuth, json('16kb'), accountRoutes);
+// 300kb: a profile photo (a 256 px JPEG, under 200 KB) is saved through PATCH /api/account.
+app.use('/api/account', rejectToken, requireAuth, json('300kb'), accountRoutes);
 app.use('/api/almanac', requireAuth, json('55mb'), almanac.router);
 app.use('/api/notes', requireAuth, json('9mb'), noteRoutes);
 app.use('/api/apps', requireAuth, json('6mb'), appdocRoutes);

@@ -30,7 +30,7 @@ const host = {
 };
 
 function satchelUser(u) {
-  return { id: u.id, email: u.email, name: u.name || String(u.email || '').split('@')[0], createdAt: u.createdAt ? new Date(u.createdAt).toISOString() : undefined };
+  return { id: u.id, email: u.email, name: u.name || String(u.email || '').split('@')[0], createdAt: u.createdAt ? new Date(u.createdAt).toISOString() : undefined, timeZone: u.timeZone || null, avatar: u.avatar || null };
 }
 
 const router = express.Router();

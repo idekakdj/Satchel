@@ -1,4 +1,4 @@
-// Satchel shell: tab bar, app iframes and the dashboard. Vanilla ES module, DOM APIs only.
+// Satchel shell: collapsible sidebar, app iframes and the dashboard. Vanilla ES module, DOM APIs only.
 
 const Q = '(\\?[A-Za-z0-9=&_.%-]{0,120})?$';
 const APPS = {
@@ -7,21 +7,27 @@ const APPS = {
   ledger: { name: 'Ledger', desc: 'Budgets and spending', icon: '/ledger/img/icon.svg', path: '/ledger/app', re: new RegExp('^/ledger/app' + Q) },
   stride: { name: 'Stride', desc: 'Workouts and meals', icon: '/stride/img/icon.svg', path: '/stride/app', re: new RegExp('^/stride/app' + Q) },
   tunnel: { name: 'Tunnel', desc: 'WireGuard VPN profiles', icon: '/tunnel/img/icon.svg', path: '/tunnel/app', re: new RegExp('^/tunnel/app' + Q) },
+  // Satchel-wide settings (account, photo, time zone, sign out): opened from the account menu
+  // or any app (Almanac's avatar), shown like an app but not listed in the sidebar.
+  settings: { name: 'Settings', desc: 'Account and Satchel settings', icon: '/img/satchel.svg', path: '/account', re: new RegExp('^/account' + Q) },
 };
 const APP_ORDER = ['almanac', 'margin', 'ledger', 'stride', 'tunnel'];
-const MAX_TABS = 24;
-const RECENT = 6;
+const NAV_ORDER = ['home', ...APP_ORDER];
+const FRAME_PREFIX = 'tk-tab-';
+const SIDEBAR_KEY = 'satchel.sidebar.v1';
 
 const $ = id => document.getElementById(id);
 const els = {
-  topbar: $('topbar'), homeBtn: $('home-btn'), strip: $('tab-strip'), newTab: $('new-tab-btn'),
+  sidebar: $('sidebar'), nav: $('sb-nav'), toggle: $('sb-toggle'), backdrop: $('sb-backdrop'),
+  menuBtn: $('menu-btn'), mobileTitle: $('mobilebar-title'), main: $('main'), sbClose: $('sb-close'), settingsBtn: $('settings-btn'),
   userBtn: $('user-btn'), userPop: $('user-pop'), userName: $('user-name'), userAvatar: $('user-avatar'),
   signout: $('signout-btn'), content: $('content'), homeView: $('home-view'), frames: $('frames'),
   greeting: $('greeting'), dateLine: $('date-line'), sections: $('sections'), toast: $('toast'),
 };
 
-const state = { user: null, tabs: [], activeId: null, sections: {} };
-const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+// active: 'home' or an app key. paths/titles: last known page of each app.
+const state = { user: null, active: 'home', paths: {}, titles: {}, sections: {} };
+const narrow = window.matchMedia('(max-width: 759px)');
 
 function h(tag, cls, text) {
   const el = document.createElement(tag);
@@ -31,9 +37,10 @@ function h(tag, cls, text) {
 }
 
 // ---------- helpers ----------
+const VIEW_KEYS = [...APP_ORDER, 'settings'];
 function appForPath(path) {
   if (typeof path !== 'string') return null;
-  return APP_ORDER.find(k => APPS[k].re.test(path)) || null;
+  return VIEW_KEYS.find(k => APPS[k].re.test(path)) || null;
 }
 
 function goAuth() { location.href = '/auth?next=/'; }
@@ -77,331 +84,219 @@ function relTime(ts) {
 }
 
 // ---------- persistence ----------
-function storageKey() { return 'satchel.tabs.v1:' + state.user.id; }
+function storageKey() { return 'satchel.shell.v2:' + state.user.id; }
 function saveState() {
-  try { localStorage.setItem(storageKey(), JSON.stringify({ tabs: state.tabs, activeId: state.activeId })); } catch { /* storage unavailable */ }
+  try { localStorage.setItem(storageKey(), JSON.stringify({ active: state.active, paths: state.paths })); } catch { /* storage unavailable */ }
 }
-function newId() {
-  let id;
-  do { id = 't' + Math.random().toString(36).slice(2, 9); } while (state.tabs.some(t => t.id === id));
-  return id;
-}
-// First visit (nothing saved yet): start with Almanac open in a tab, behind Home.
-function defaultTabs() {
-  state.tabs.push({ id: newId(), app: 'almanac', path: APPS.almanac.path, title: APPS.almanac.name });
-}
-
 function loadState() {
   try {
     const raw = JSON.parse(localStorage.getItem(storageKey()) || 'null');
-    if (!raw || !Array.isArray(raw.tabs)) { defaultTabs(); return; }
-    const seen = new Set();
-    for (const t of raw.tabs) {
-      if (!t || typeof t.id !== 'string' || !/^[A-Za-z0-9]{1,16}$/.test(t.id) || seen.has(t.id)) continue;
-      const app = appForPath(t.path);
-      if (!app) continue;
-      seen.add(t.id);
-      state.tabs.push({ id: t.id, app, path: t.path, title: typeof t.title === 'string' && t.title ? t.title.slice(0, 120) : APPS[app].name });
-      if (state.tabs.length >= MAX_TABS) break;
+    if (!raw || typeof raw !== 'object') return;
+    if (raw.paths && typeof raw.paths === 'object') {
+      for (const k of VIEW_KEYS) if (typeof raw.paths[k] === 'string' && appForPath(raw.paths[k]) === k) state.paths[k] = raw.paths[k];
     }
-    if (typeof raw.activeId === 'string' && state.tabs.some(t => t.id === raw.activeId)) state.activeId = raw.activeId;
+    if (VIEW_KEYS.includes(raw.active)) state.active = raw.active;
   } catch { /* corrupt or unavailable */ }
 }
 
-// ---------- tab strip ----------
-const tabEls = new Map();
-
-function tabById(id) { return state.tabs.find(t => t.id === id) || null; }
-
-function renderTabs() {
-  els.strip.textContent = '';
-  tabEls.clear();
-  for (const tab of state.tabs) {
-    const active = tab.id === state.activeId;
-    const el = h('div', 'tab app-' + tab.app);
-    el.setAttribute('role', 'tab');
-    el.setAttribute('aria-selected', active ? 'true' : 'false');
-    el.tabIndex = active ? 0 : -1;
-    el.dataset.id = tab.id;
-    el.title = tab.title;
-    el.append(h('span', 'tab-dot'), h('span', 'tab-title', tab.title));
-    const close = h('button', 'tab-close');
-    close.type = 'button';
-    close.tabIndex = -1;
-    close.setAttribute('aria-label', 'Close ' + tab.title);
-    close.append(xIcon());
-    close.addEventListener('click', e => { e.stopPropagation(); closeTab(tab.id); });
-    el.append(close);
-    wireTab(el, tab);
-    els.strip.append(el);
-    tabEls.set(tab.id, el);
-  }
-  els.homeBtn.classList.toggle('is-active', state.activeId === null);
-  if (state.activeId === null) els.homeBtn.setAttribute('aria-current', 'page');
-  else els.homeBtn.removeAttribute('aria-current');
-}
-
-function xIcon() {
-  const ns = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(ns, 'svg');
-  svg.setAttribute('viewBox', '0 0 12 12');
-  svg.setAttribute('width', '10');
-  svg.setAttribute('height', '10');
+// ---------- sidebar ----------
+const NS = 'http://www.w3.org/2000/svg';
+function homeIcon() {
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 20 20');
+  svg.setAttribute('width', '20');
+  svg.setAttribute('height', '20');
   svg.setAttribute('aria-hidden', 'true');
-  const p = document.createElementNS(ns, 'path');
-  p.setAttribute('d', 'M2.5 2.5l7 7M9.5 2.5l-7 7');
+  const p = document.createElementNS(NS, 'path');
+  p.setAttribute('d', 'M3.5 9.2 10 3.5l6.5 5.7V16a.8.8 0 0 1-.8.8H12v-4.4H8v4.4H4.3a.8.8 0 0 1-.8-.8z');
   p.setAttribute('fill', 'none');
   p.setAttribute('stroke', 'currentColor');
   p.setAttribute('stroke-width', '1.5');
-  p.setAttribute('stroke-linecap', 'round');
+  p.setAttribute('stroke-linejoin', 'round');
   svg.append(p);
   return svg;
 }
 
-let suppressClick = false;
-
-function wireTab(el, tab) {
-  el.addEventListener('click', () => {
-    if (suppressClick) return;
-    activate(tab.id, { focus: 'content' });
-  });
-  el.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
-  el.addEventListener('auxclick', e => { if (e.button === 1) { e.preventDefault(); closeTab(tab.id); } });
-  el.addEventListener('keydown', e => {
-    if (e.target !== el) return;
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(tab.id, { focus: 'content' }); }
-    else if (e.key === 'Delete') { e.preventDefault(); closeTab(tab.id); }
-  });
-  wireDrag(el, tab);
-}
-
-// Pointer-based drag to reorder.
-function wireDrag(el, tab) {
-  el.addEventListener('pointerdown', e => {
-    if (e.button !== 0 || e.target.closest('.tab-close')) return;
-    const startX = e.clientX;
-    const grab = startX - el.getBoundingClientRect().left;
-    const pid = e.pointerId;
-    let dragging = false;
-
-    const place = x => {
-      el.style.transform = 'none';
-      let natural = el.getBoundingClientRect().left;
-      const center = () => { const r = el.getBoundingClientRect(); return r.left + r.width / 2 + (x - grab - natural); };
-      for (let guard = 0; guard < 50; guard++) {
-        const prev = el.previousElementSibling;
-        const next = el.nextElementSibling;
-        const c = center();
-        if (prev) { const r = prev.getBoundingClientRect(); if (c < r.left + r.width / 2) { els.strip.insertBefore(el, prev); natural = el.getBoundingClientRect().left; continue; } }
-        if (next) { const r = next.getBoundingClientRect(); if (c > r.left + r.width / 2) { els.strip.insertBefore(el, next.nextSibling); natural = el.getBoundingClientRect().left; continue; } }
-        break;
-      }
-      el.style.transform = 'translateX(' + Math.round(x - grab - natural) + 'px)';
-    };
-    const move = ev => {
-      if (ev.pointerId !== pid) return;
-      if (!dragging) {
-        if (Math.abs(ev.clientX - startX) < 6) return;
-        dragging = true;
-        try { el.setPointerCapture(pid); } catch { /* ignore */ }
-        el.classList.add('is-dragging');
-      }
-      place(ev.clientX);
-    };
-    const end = ev => {
-      if (ev.pointerId !== pid) return;
-      el.removeEventListener('pointermove', move);
-      el.removeEventListener('pointerup', end);
-      el.removeEventListener('pointercancel', end);
-      if (!dragging) return;
-      suppressClick = true;
-      setTimeout(() => { suppressClick = false; }, 0);
-      el.style.transform = '';
-      el.classList.remove('is-dragging');
-      const order = [...els.strip.children].map(c => c.dataset.id);
-      state.tabs.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
-      saveState();
-    };
-    el.addEventListener('pointermove', move);
-    el.addEventListener('pointerup', end);
-    el.addEventListener('pointercancel', end);
+const navEls = new Map();
+function buildSidebar() {
+  els.nav.textContent = '';
+  NAV_ORDER.forEach((key, i) => {
+    const isHome = key === 'home';
+    const name = isHome ? 'Home' : APPS[key].name;
+    const b = h('button', 'sb-item' + (isHome ? ' app-home' : ' app-' + key));
+    b.type = 'button';
+    b.dataset.key = key;
+    b.dataset.tip = name;
+    b.setAttribute('aria-label', name);
+    b.title = name + '  (Ctrl+Alt+' + (i + 1) + ')';
+    const ico = h('span', 'sb-icon');
+    if (isHome) ico.append(homeIcon());
+    else { const img = h('img'); img.src = APPS[key].icon; img.alt = ''; img.width = 24; img.height = 24; ico.append(img); }
+    b.append(ico, h('span', 'sb-label', name));
+    b.addEventListener('click', () => select(key, { focus: 'content' }));
+    els.nav.append(b);
+    navEls.set(key, b);
   });
 }
 
-// ---------- activation, frames ----------
-function frameFor(tab) { return els.frames.querySelector('iframe[name="tk-tab-' + tab.id + '"]'); }
-
-function ensureFrame(tab) {
-  let f = frameFor(tab);
-  if (f) return f;
-  f = document.createElement('iframe');
-  f.name = 'tk-tab-' + tab.id;
-  f.className = 'tab-frame';
-  f.title = tab.title;
-  f.setAttribute('allow', 'clipboard-read; clipboard-write');
-  f.addEventListener('load', () => { if (state.activeId === tab.id && pendingFocus === tab.id) { pendingFocus = null; focusFrame(f); } });
-  f.src = tab.path;
-  els.frames.append(f);
-  return f;
+function renderNav() {
+  for (const [key, b] of navEls) {
+    const on = key === state.active;
+    b.classList.toggle('is-active', on);
+    if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  }
 }
+
+function setCollapsed(on, persist) {
+  document.body.classList.toggle('sb-collapsed', on);
+  els.toggle.setAttribute('aria-expanded', on ? 'false' : 'true');
+  els.toggle.setAttribute('aria-label', on ? 'Expand sidebar' : 'Collapse sidebar');
+  els.toggle.title = on ? 'Expand sidebar' : 'Collapse sidebar';
+  if (persist) { try { localStorage.setItem(SIDEBAR_KEY, on ? '1' : '0'); } catch { /* storage unavailable */ } }
+}
+
+function setDrawer(open, opts = {}) {
+  const on = open && narrow.matches;
+  const was = document.body.classList.contains('sb-open');
+  document.body.classList.toggle('sb-open', on);
+  els.backdrop.hidden = !on;
+  els.menuBtn.setAttribute('aria-expanded', on ? 'true' : 'false');
+  els.menuBtn.setAttribute('aria-label', on ? 'Close menu' : 'Open menu');
+  // While the drawer covers the page, nothing behind it (including an app frame) can take focus.
+  els.main.inert = on;
+  els.sbClose.hidden = !on;
+  if (was && !on && opts.restoreFocus) els.menuBtn.focus();
+}
+
+// ---------- switching, frames ----------
+function frameFor(key) { return els.frames.querySelector('iframe[name="' + FRAME_PREFIX + key + '"]'); }
 
 let pendingFocus = null;
 function focusFrame(f) { try { f.contentWindow.focus(); } catch { /* ignore */ } }
 
-function activate(id, opts = {}) {
-  const tab = id === null ? null : tabById(id);
-  if (id !== null && !tab) return;
-  const wasHome = state.activeId === null;
-  state.activeId = tab ? tab.id : null;
-  for (const f of els.frames.querySelectorAll('iframe')) f.classList.remove('is-active');
-  if (tab) {
-    const created = !frameFor(tab);
-    const f = ensureFrame(tab);
-    f.classList.add('is-active');
-    if (opts.focus === 'content') { if (created) pendingFocus = tab.id; else focusFrame(f); }
-  }
-  els.content.classList.toggle('show-frames', !!tab);
-  renderTabs();
-  saveState();
-  updateTitle();
-  if (opts.focus === 'tab') {
-    const target = tab ? tabEls.get(tab.id) : els.homeBtn;
-    if (target) target.focus();
-  } else if (!tab && opts.focus === 'content') {
-    els.homeView.focus({ preventScroll: true });
-  }
-  scrollActiveIntoView();
-  if (opts.initial) refreshAll(true);
-  else if (!tab && !wasHome) refreshAll(false);
+function ensureFrame(key, path) {
+  let f = frameFor(key);
+  if (f) return f;
+  f = document.createElement('iframe');
+  f.name = FRAME_PREFIX + key;
+  f.className = 'tab-frame';
+  f.title = APPS[key].name;
+  f.setAttribute('allow', 'clipboard-read; clipboard-write');
+  f.addEventListener('load', () => {
+    f.dataset.loaded = '1';
+    if (state.active === key && pendingFocus === key) { pendingFocus = null; focusFrame(f); }
+  });
+  f.src = path;
+  els.frames.append(f);
+  return f;
 }
 
-function scrollActiveIntoView() {
-  const el = state.activeId ? tabEls.get(state.activeId) : null;
-  if (el) el.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: reduceMotion.matches ? 'auto' : 'smooth' });
-  else els.strip.scrollTo({ left: 0 });
+// Show Home or an app. App frames are created on first open and then kept alive (hidden).
+// opts.path: create the app's frame at this page. opts.focus: 'content' moves focus into the view.
+function select(key, opts = {}) {
+  if (key !== 'home' && !APPS[key]) return;
+  if (key === 'settings') state.paths.settings = APPS.settings.path;
+  const wasHome = state.active === 'home';
+  state.active = key;
+  for (const f of els.frames.querySelectorAll('iframe')) f.classList.remove('is-active');
+  if (key !== 'home') {
+    const created = !frameFor(key);
+    const f = ensureFrame(key, opts.path || state.paths[key] || APPS[key].path);
+    f.classList.add('is-active');
+    if (created && opts.path) state.paths[key] = opts.path;
+    if (opts.focus === 'content') { if (created) pendingFocus = key; else focusFrame(f); }
+  } else if (opts.focus === 'content') {
+    els.homeView.focus({ preventScroll: true });
+  }
+  els.content.classList.toggle('show-frames', key !== 'home');
+  renderNav();
+  saveState();
+  updateTitle();
+  if (narrow.matches) setDrawer(false);
+  if (opts.initial) refreshAll(true);
+  else if (key === 'home' && !wasHome) refreshAll(false);
 }
 
 function updateTitle() {
-  const tab = state.activeId ? tabById(state.activeId) : null;
-  document.title = tab ? tab.title + ' — Satchel' : 'Satchel';
+  const key = state.active;
+  document.title = key === 'home' ? 'Satchel' : (state.titles[key] || APPS[key].name) + ' — Satchel';
+  els.mobileTitle.textContent = key === 'home' ? 'Satchel' : (state.titles[key] || APPS[key].name);
 }
 
-function showHome() { activate(null, { focus: 'content' }); }
+function showHome() { select('home', { focus: 'content' }); }
 
-function openPath(path, title) {
-  const app = appForPath(path);
-  if (!app) return null;
-  // One tab per app: opening another page of an open app (a note, a form) reuses its tab.
-  const existing = state.tabs.find(t => t.app === app);
-  if (existing) {
-    const f = frameFor(existing);
-    if (f && existing.path !== path) {
+// Open a path inside its app. If the app's frame exists it is told to navigate (every time,
+// even to the same path); otherwise the frame is created at that path.
+function openPath(path) {
+  const key = appForPath(path);
+  if (!key) return false;
+  const f = frameFor(key);
+  state.paths[key] = path;
+  if (f) {
+    if (f.dataset.loaded) {
       try { f.contentWindow.postMessage({ source: 'satchel-shell', type: 'navigate', path }, location.origin); } catch { f.src = path; }
-    } else if (!f) existing.path = path;
-    activate(existing.id, { focus: 'content' });
-    return existing;
-  }
-  if (state.tabs.length >= MAX_TABS) { toast('You have reached the limit of ' + MAX_TABS + ' open tabs. Close one to open another.'); return null; }
-  const tab = { id: newId(), app, path, title: (title && String(title).slice(0, 120)) || APPS[app].name };
-  state.tabs.push(tab);
-  activate(tab.id, { focus: 'content' });
-  return tab;
-}
-
-function closeTab(id) {
-  const i = state.tabs.findIndex(t => t.id === id);
-  if (i < 0) return;
-  const wasActive = state.activeId === id;
-  const [tab] = state.tabs.splice(i, 1);
-  const f = frameFor(tab);
-  if (f) f.remove();
-  if (wasActive) {
-    const next = state.tabs[i] || state.tabs[i - 1] || null;
-    activate(next ? next.id : null, { focus: 'content' });
+    } else {
+      f.src = path;
+    }
+    select(key, { focus: 'content' });
   } else {
-    renderTabs();
-    saveState();
+    select(key, { focus: 'content', path });
   }
+  return true;
 }
 
-function switchBy(dir, focus) {
-  const order = [null, ...state.tabs.map(t => t.id)];
-  const i = order.indexOf(state.activeId);
-  const j = Math.min(order.length - 1, Math.max(0, i + dir));
-  if (j === i) return;
-  activate(order[j], { focus });
+// Dashboard buttons that just open an app keep its current page; specific paths navigate.
+function openFromWidget(path) {
+  const key = appForPath(path);
+  if (key && path === APPS[key].path) select(key, { focus: 'content' });
+  else openPath(path);
 }
 
-// ---------- keyboard and swipe ----------
-function isEditable(t) {
-  return !!(t && t.closest && t.closest('input, textarea, select, [contenteditable], [data-tk-keep-arrows]'));
-}
-
+// ---------- keyboard ----------
 window.addEventListener('keydown', e => {
-  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-  const dir = e.key === 'ArrowRight' ? 1 : -1;
-  const focus = els.topbar.contains(e.target) ? 'tab' : 'content';
-  if ((e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey) { e.preventDefault(); switchBy(dir, focus); return; }
-  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.defaultPrevented || isEditable(e.target)) return;
-  if (e.target === els.userBtn || els.userPop.contains(e.target)) return;
-  e.preventDefault();
-  switchBy(dir, focus);
+  if (e.key === 'Escape' && document.body.classList.contains('sb-open')) {
+    e.preventDefault();
+    setDrawer(false, { restoreFocus: true });
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey) {
+    const m = /^Digit([1-6])$/.exec(e.code || '');
+    if (m) { e.preventDefault(); select(NAV_ORDER[Number(m[1]) - 1], { focus: 'content' }); }
+  }
 });
 
-let wheelSum = 0, wheelLast = 0, wheelBlockedUntil = 0;
-function inNoSwipe(t) {
-  for (let n = t; n && n.nodeType === 1; n = n.parentElement) {
-    const tag = n.tagName.toLowerCase();
-    if (tag === 'canvas' || tag === 'svg' || n.hasAttribute('data-tk-no-swipe')) return true;
-    if (n.scrollWidth > n.clientWidth) {
-      const ox = getComputedStyle(n).overflowX;
-      if (ox === 'auto' || ox === 'scroll') return true;
-    }
-  }
-  return false;
-}
-window.addEventListener('wheel', e => {
-  const now = performance.now();
-  if (e.ctrlKey || e.defaultPrevented || !(Math.abs(e.deltaX) > Math.abs(e.deltaY) * 1.5)) return;
-  if (now < wheelBlockedUntil || inNoSwipe(e.target)) return;
-  if (now - wheelLast > 200) wheelSum = 0;
-  wheelLast = now;
-  wheelSum += e.deltaX;
-  if (Math.abs(wheelSum) >= 120) {
-    const dir = wheelSum > 0 ? 1 : -1;
-    wheelSum = 0;
-    wheelBlockedUntil = now + 600;
-    switchBy(dir, 'none');
-  }
-}, { passive: true });
-
-// ---------- messages from app tabs ----------
+// ---------- messages from app frames ----------
 window.addEventListener('message', e => {
   if (e.origin !== location.origin) return;
   const msg = e.data;
   if (!msg || typeof msg !== 'object' || msg.source !== 'satchel-tab') return;
   const frame = [...els.frames.querySelectorAll('iframe')].find(f => f.contentWindow === e.source);
   if (!frame) return;
-  const tab = tabById(frame.name.replace(/^tk-tab-/, ''));
-  if (!tab) return;
+  const key = frame.name.slice(FRAME_PREFIX.length);
+  if (!APPS[key]) return;
   switch (msg.type) {
     case 'meta': {
-      const app = appForPath(msg.path);
-      if (!app) return;
-      const title = typeof msg.title === 'string' && msg.title.trim() ? msg.title.trim().slice(0, 120) : APPS[app].name;
-      if (tab.path === msg.path && tab.title === title && tab.app === app) return;
-      tab.path = msg.path; tab.title = title; tab.app = app;
+      if (appForPath(msg.path) !== key) return;
+      const title = typeof msg.title === 'string' && msg.title.trim() ? msg.title.trim().slice(0, 120) : APPS[key].name;
+      state.paths[key] = msg.path;
+      state.titles[key] = title;
       frame.title = title;
-      renderTabs(); saveState(); updateTitle(); scrollActiveIntoView();
+      saveState();
+      if (state.active === key) updateTitle();
       break;
     }
-    case 'switch':
-      if (msg.direction === 1 || msg.direction === -1) {
-        if (state.activeId === tab.id) switchBy(msg.direction, 'content');
-      }
-      break;
     case 'home':
       showHome();
+      break;
+    case 'activate':
+      // An app asks to come to the front as it is (a reminder was clicked): no navigation.
+      select(key, { focus: 'content' });
+      break;
+    case 'settings':
+      if (key === 'settings') void settingsChanged();
+      break;
+    case 'goto':
+      if (Number.isInteger(msg.index) && msg.index >= 0 && msg.index < NAV_ORDER.length) select(NAV_ORDER[msg.index], { focus: 'content' });
       break;
     case 'open':
       if (typeof msg.path === 'string') openPath(msg.path);
@@ -411,10 +306,6 @@ window.addEventListener('message', e => {
 
 // ---------- dashboard ----------
 // One widget per app, filled from /api/dashboard (a small read-only summary).
-function greetingFor(d) {
-  const hr = d.getHours();
-  return hr < 5 ? 'Up late' : hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
-}
 function money(cents, currency) {
   try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency || 'CAD' }).format((cents || 0) / 100); }
   catch { return ((cents || 0) / 100).toFixed(2); }
@@ -422,7 +313,7 @@ function money(cents, currency) {
 function widgetButton(label, path, primary) {
   const b = h('button', primary ? 'btn btn-primary btn-sm' : 'btn btn-sm', label);
   b.type = 'button';
-  b.addEventListener('click', () => openPath(path));
+  b.addEventListener('click', () => openFromWidget(path));
   return b;
 }
 function emptyLine(text) { return h('p', 'widget-empty', text); }
@@ -472,7 +363,7 @@ const RENDER = {
       const text = h('span', 'row-text');
       text.append(h('span', 'row-title', n.title || 'Untitled note'), h('span', 'row-sub', (n.hasInk ? '✎ ' : '') + (n.preview ? n.preview.slice(0, 70) : relTime(n.updatedAt))));
       b.append(h('span', 'row-dot'), text);
-      b.addEventListener('click', () => openPath('/margin/app?note=' + encodeURIComponent(n.id), n.title));
+      b.addEventListener('click', () => openPath('/margin/app?note=' + encodeURIComponent(n.id)));
       li.append(b);
       list.append(li);
     }
@@ -502,6 +393,15 @@ const RENDER = {
     stats.append(stat('Calories today', data.goal ? data.kcal.toLocaleString() + ' / ' + data.goal.toLocaleString() : data.kcal.toLocaleString()), stat('Workouts this week', String(data.workoutsThisWeek)));
     body.append(stats);
     if (data.goal) body.append(bar(data.kcal, data.goal, 'Calories eaten today'));
+    if (data.next && data.next.id) {
+      // The next planned meal or workout opens straight in Stride's plan.
+      const n = data.next;
+      const when = (n.date === todayInZone() ? 'Today' : n.date) + ' ' + n.time;
+      const link = h('button', 'link-btn widget-note', 'Next: ' + n.name + ' · ' + when);
+      link.type = 'button';
+      link.addEventListener('click', () => openPath(n.kind === 'meal' ? '/stride/app?tab=plan&meal=' + encodeURIComponent(n.id) : '/stride/app?tab=workouts&planned=' + encodeURIComponent(n.id)));
+      body.append(link);
+    }
     if (data.lastWorkout) body.append(h('p', 'widget-note', 'Last workout: ' + data.lastWorkout.name + ' · ' + data.lastWorkout.date));
     return [widgetButton('Log food', '/stride/app?tab=meals', true), widgetButton('Start workout', '/stride/app?tab=workouts')];
   },
@@ -534,7 +434,7 @@ function buildDashboard() {
     tile.setAttribute('aria-label', 'Open ' + app.name);
     const img = h('img'); img.src = app.icon; img.alt = ''; img.width = 40; img.height = 40;
     tile.append(img);
-    tile.addEventListener('click', () => openPath(app.path));
+    tile.addEventListener('click', () => select(key, { focus: 'content' }));
     const meta = h('div', 'app-meta');
     const name = h('h2', 'app-name', app.name);
     name.id = 'w-' + key;
@@ -596,8 +496,16 @@ function setUserMenu(open) {
   els.userBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 
-els.homeBtn.addEventListener('click', showHome);
-els.newTab.addEventListener('click', showHome);
+els.toggle.addEventListener('click', () => setCollapsed(!document.body.classList.contains('sb-collapsed'), true));
+els.menuBtn.addEventListener('click', () => {
+  const open = !document.body.classList.contains('sb-open');
+  setDrawer(open, { restoreFocus: true });
+  if (open) { const first = navEls.get(state.active) || els.nav.firstElementChild; if (first) first.focus(); }
+});
+els.backdrop.addEventListener('click', () => setDrawer(false, { restoreFocus: true }));
+els.sbClose.addEventListener('click', () => setDrawer(false, { restoreFocus: true }));
+narrow.addEventListener('change', () => setDrawer(false));
+
 els.userBtn.addEventListener('click', e => {
   e.stopPropagation();
   const open = els.userPop.hidden;
@@ -612,30 +520,76 @@ els.userPop.addEventListener('keydown', e => {
   const i = items.indexOf(document.activeElement);
   if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
   else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
-  else if (e.key === 'Escape') { e.preventDefault(); setUserMenu(false); els.userBtn.focus(); }
+  else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setUserMenu(false); els.userBtn.focus(); }
   else if (e.key === 'Tab') setUserMenu(false);
 });
+els.settingsBtn.addEventListener('click', () => { setUserMenu(false); select('settings', { focus: 'content' }); });
 els.signout.addEventListener('click', async () => {
   els.signout.disabled = true;
   try { await fetch('/api/auth/logout', { method: 'POST', headers: { 'X-Requested-With': 'satchel' }, credentials: 'same-origin' }); } catch { /* go home regardless */ }
   location.href = '/';
 });
 
+// ---------- account: name, photo, time zone ----------
+function browserZone() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } }
+function validZone(z) { if (typeof z !== 'string' || !z) return false; try { new Intl.DateTimeFormat('en-CA', { timeZone: z }); return true; } catch { return false; } }
+function userZone() { return state.user && validZone(state.user.timeZone) ? state.user.timeZone : browserZone(); }
+function todayInZone() {
+  const p = {};
+  for (const x of new Intl.DateTimeFormat('en-CA', { timeZone: userZone(), year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date())) p[x.type] = x.value;
+  return p.year + '-' + p.month + '-' + p.day;
+}
+function hourInZone() { return Number(new Intl.DateTimeFormat('en-CA', { timeZone: userZone(), hour: '2-digit', hourCycle: 'h23' }).format(new Date())) % 24; }
+function showUser(u) {
+  const full = String(u.name || '').trim();
+  const label = full || String(u.email || '').split('@')[0] || 'Account';
+  els.userName.textContent = label;
+  els.userAvatar.textContent = '';
+  if (typeof u.avatar === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(u.avatar)) {
+    const img = h('img'); img.src = u.avatar; img.alt = ''; els.userAvatar.append(img);
+    els.userAvatar.classList.add('has-photo');
+  } else {
+    els.userAvatar.textContent = (label.charAt(0) || '?').toUpperCase();
+    els.userAvatar.classList.remove('has-photo');
+  }
+  els.userBtn.dataset.tip = label;
+  els.userBtn.title = label;
+  const hr = hourInZone();
+  els.greeting.textContent = (hr < 5 ? 'Up late' : hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening') + ', ' + (label.split(/\s+/)[0]);
+  els.dateLine.textContent = new Date().toLocaleDateString(undefined, { timeZone: userZone(), weekday: 'long', month: 'long', day: 'numeric' });
+}
+// Settings saved something: refresh the name and photo here, and tell every open app the zone.
+async function settingsChanged() {
+  let me;
+  try { me = await request('/api/auth/me'); } catch { return; }
+  if (!me || !me.user) return;
+  state.user = me.user;
+  showUser(me.user);
+  for (const f of els.frames.querySelectorAll('iframe')) {
+    if (!f.dataset.loaded) continue;
+    try { f.contentWindow.postMessage({ source: 'satchel-shell', type: 'settings', timeZone: userZone() }, location.origin); } catch { /* ignore */ }
+  }
+  if (state.active === 'home') refreshAll(false);
+}
+
 // ---------- start ----------
 async function init() {
   // Loaded inside a frame (frame-escape.js is handling it): never run a second shell,
-  // which would overwrite the real shell's saved tabs.
+  // which would overwrite the real shell's saved state.
   if (window.top !== window) return;
   let me;
   try { me = await request('/api/auth/me'); } catch { return; }
   if (!me || !me.user || !me.user.id) { goAuth(); return; }
   state.user = me.user;
-  const full = String(me.user.name || '').trim();
-  const label = full || String(me.user.email || '').split('@')[0] || 'Account';
-  els.userName.textContent = label;
-  els.userAvatar.textContent = (label.charAt(0) || '?').toUpperCase();
-  els.greeting.textContent = greetingFor(new Date()) + ', ' + (label.split(/\s+/)[0]);
-  els.dateLine.textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  showUser(me.user);
+  // First visit: the account takes this device's time zone until it is changed in Settings.
+  if (!me.user.timeZone && validZone(browserZone())) {
+    request('/api/account', { method: 'PATCH', body: { timeZone: browserZone() } }).then(r => { if (r && r.account) state.user.timeZone = r.account.timeZone; showUser(state.user); }).catch(() => {});
+  }
+  let collapsed = false;
+  try { collapsed = localStorage.getItem(SIDEBAR_KEY) === '1'; } catch { /* ignore */ }
+  setCollapsed(collapsed, false);
+  buildSidebar();
   buildDashboard();
   loadState();
 
@@ -646,8 +600,8 @@ async function init() {
     if (openParam !== null) history.replaceState(null, '', '/');
   } catch { /* ignore */ }
 
-  renderTabs();
-  activate(state.activeId, { initial: true });
-  if (openParam && appForPath(openParam)) openPath(openParam);
+  if (openParam && appForPath(openParam)) { openPath(openParam); refreshAll(true); }
+  else if (openParam === 'settings') { select('settings', { focus: 'content' }); refreshAll(true); }
+  else select(state.active, { initial: true });
 }
 init();

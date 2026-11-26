@@ -130,7 +130,41 @@ export function uid() {
   return btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 export function debounce(fn, ms) { let t = 0; const d = (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; d.cancel = () => clearTimeout(t); return d; }
-export function todayISO(d = new Date()) { const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10); }
+// ---------- the Satchel-wide time zone (Settings > Time zone) ----------
+// Every app reads "today" and "now" in this one zone, so Almanac and Stride always agree.
+function browserZone() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } }
+export function validZone(z) { if (typeof z !== 'string' || !z || z.length > 64) return false; try { new Intl.DateTimeFormat('en-CA', { timeZone: z }); return true; } catch { return false; } }
+let ZONE = browserZone();
+try {
+  const r = await fetch('/api/auth/me', { headers: { 'X-Requested-With': 'satchel' }, credentials: 'same-origin' });
+  if (r.ok) { const j = await r.json(); if (j && j.user && validZone(j.user.timeZone)) ZONE = j.user.timeZone; }
+} catch { /* offline or signed out: the browser's zone until the app's own requests sort it out */ }
+/** The Satchel time zone (an IANA name such as America/Toronto). */
+export const zone = () => ZONE;
+/** Calendar date and 24-hour clock time of an instant in the Satchel time zone. */
+export function nowInZone(d = new Date()) {
+  const p = {};
+  for (const x of new Intl.DateTimeFormat('en-CA', { timeZone: ZONE, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(d)) p[x.type] = x.value;
+  return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour === '24' ? '00' : p.hour}:${p.minute}` };
+}
+/** Run `fn()` after the time zone is changed in Settings (the page stays open). */
+export function onSettingsChange(fn) {
+  window.addEventListener('satchel:settings', e => {
+    const z = e.detail && e.detail.timeZone;
+    if (validZone(z) && z !== ZONE) { ZONE = z; fn(); }
+  });
+}
+/** A real calendar date in YYYY-MM-DD form (rejects 2026-13-01 and 2026-02-30). */
+export function isISODate(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(s + 'T00:00:00Z');
+  return !isNaN(d) && d.toISOString().slice(0, 10) === s;
+}
+/** Today in the Satchel time zone. With a Date argument: that Date's own local calendar date. */
+export function todayISO(d) {
+  if (!d) return nowInZone().date;
+  const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10);
+}
 export function addDaysISO(iso, n) { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n); return todayISO(d); }
 export function fmtDate(iso, opts = { month: 'short', day: 'numeric' }) { const d = new Date(iso + 'T12:00:00'); return isNaN(d) ? iso : d.toLocaleDateString(undefined, opts); }
 export function relTime(ts) {
@@ -170,31 +204,49 @@ export function createDocStore(app, { defaults, migrate, onState, onConflict } =
       store.doc = r.document ? (migrate ? migrate(r.document) : r.document) : defaults();
       return store.doc;
     },
-    changed() { set('pending'); save(); },
+    changed() { edits++; set('pending'); save(); },
     async flush() { save.cancel(); await write(); },
+    /** True while some edit has not reached the server yet. */
+    get dirty() { return edits !== savedEdits || !!inFlight; },
+    /**
+     * Fetch the newest saved version when nothing local is waiting to be saved, so an edit
+     * made on another device shows up here. Resolves true when the document was replaced.
+     */
+    async refresh() {
+      if (store.dirty || store.state === 'conflict') return false;
+      const r = await api('/api/apps/' + app);
+      if (store.dirty || (r.revision || 0) === store.revision) return false;
+      store.revision = r.revision || 0;
+      store.doc = r.document ? (migrate ? migrate(r.document) : r.document) : defaults();
+      return true;
+    },
   };
-  let inFlight = null, again = false;
+  // Every change bumps `edits`; a save records which edit it carried, so a change made while
+  // a save is in flight is never marked as saved by that save's reply.
+  let inFlight = null, again = false, edits = 0, savedEdits = 0;
   function set(s, err) { store.state = s; store.error = err || null; if (onState) onState(s, err); }
   async function write() {
     if (inFlight) { again = true; return inFlight; }
-    if (store.state !== 'pending' && store.state !== 'error') return;
+    if (edits === savedEdits || store.state === 'conflict') return;
     set('saving');
+    const sending = edits;
     inFlight = (async () => {
       try {
         const r = await api('/api/apps/' + app, { method: 'PUT', body: { document: store.doc, baseRevision: store.revision } });
         store.revision = r.revision;
-        set(again ? 'pending' : 'saved');
+        savedEdits = sending;
+        set(edits === savedEdits ? 'saved' : 'pending');
       } catch (err) {
         if (err.status === 409) { set('conflict', err); if (onConflict) onConflict(); }
         else { set('error', err); setTimeout(() => { if (store.state === 'error') void write(); }, 8000); }
       } finally { inFlight = null; }
-      if (again) { again = false; await write(); }
+      if (again || (edits !== savedEdits && store.state === 'pending')) { again = false; await write(); }
     })();
     return inFlight;
   }
   const save = debounce(write, 700);
   // Save before the tab closes or the device sleeps.
-  const flushNow = () => { if (store.state === 'pending') { save.cancel(); void write(); } };
+  const flushNow = () => { if (store.state === 'pending' || store.state === 'error') { save.cancel(); void write(); } };
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushNow(); });
   window.addEventListener('pagehide', flushNow);
   return store;

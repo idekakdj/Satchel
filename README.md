@@ -35,9 +35,16 @@ To use Satchel on an iPad, it has to be reachable from the iPad: either host it 
 | URL | What |
 |---|---|
 | `/` | Suite landing page (signed out), or the dashboard and tabs (signed in) |
-| `/auth`, `/account` | Shared sign-in, and account settings: password, two-step sign-in, export, deletion |
+| `/auth`, `/account` | Shared sign-in, and Satchel's Settings page (opened inside the shell from the account menu or Almanac's avatar) |
 | `/almanac`, `/margin`, `/ledger`, `/stride`, `/tunnel` | App landing pages (signed out only) |
 | `/almanac/app/`, `/margin/app`, `/ledger/app`, `/stride/app`, `/tunnel/app` | The apps, which always open inside a dashboard tab |
+
+## Settings
+
+Settings belong to the whole suite, not to any one app. Open them from the account menu at the bottom of the sidebar, or from the avatar at the top right of Almanac. The page covers:
+- **Profile.** Your name and photo. The photo is cropped in the browser and shows in the sidebar and in Almanac.
+- **Time zone.** One zone for every app: Almanac's calendar and reminders, Stride's "today" and plans, and the dashboard. A new account starts with the device's zone, and changes reach open apps immediately.
+- **Security and data.** Password, two-step sign-in, signed-in devices, data export, sign out and account deletion.
 
 ## The apps
 
@@ -88,7 +95,7 @@ npm test
 
 This runs the following:
 - **The apps suite** (`satchel/test/apps.test.cjs`). It covers sign-in gating, landing pages, cross-account isolation, CSRF, revision conflicts, input validation, export and deletion, and checks that pages contain no inline scripts or styles.
-- **Six Toolkit shell suites.** These are the email, Google sign-in, upload-guard, local-runtime, migration and data-integrity suites.
+- **Five Toolkit shell suites.** These are the email, Google sign-in, upload-guard, local-runtime and data-integrity suites.
 - **Almanac's calendar tests.** 101 tests taken from C.C. Lime.
 
 Nine Toolkit suites are not yet in `npm test`: security, shell, server, mfa, hosted, remote-origin, app-saves, tokens and mcp. They still exercise Toolkit's design apps. Their app-independent checks, such as login lockout, rate limits and two-step sign-in, should be ported to the new routes.
